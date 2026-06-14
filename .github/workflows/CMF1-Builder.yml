@@ -1,121 +1,134 @@
-name: Build Official Nothing CMF 1 Kernel
+name: Build CMF Phone 1 Kernel and Modules with APatch
 
 on:
   workflow_dispatch:
     inputs:
-      boot_url:
-        description: 'Direct URL to Stock boot.img (e.g., from OneDrive, Google Drive direct link, or a file host)'
-        required: false
-        default: ''
+      SUPERKEY:
+        description: 'Set your APatch SuperKey (8-63 characters)'
+        required: true
+        default: 'MySecureSuperKey2026!'
 
 jobs:
   build-kernel:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    env:
+      SUPERKEY: ${{ github.event.inputs.SUPERKEY }}
+
     steps:
-      - name: Checkout Repository Code
-        uses: actions/checkout@v4
-
       - name: Free Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /usr/lib/jvm
-          sudo rm -rf /usr/local/share/chromium
-          sudo rm -rf /opt/microsoft
-          sudo rm -rf /opt/google
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
 
-      - name: Install Compiler Dependencies
+      # 1. Main Orchestrator Repo (Uses default main branch)
+      - name: Checkout Kernel Build Manifest Orchestrator
+        uses: actions/checkout@v4
+        with:
+          repository: 'NothingOSS/android_kernel_build_nothing_mt6878'
+          ref: 'main'
+          path: 'workspace'
+
+      # 2. Base Kernel GKI Tree Repo
+      - name: Checkout Base Kernel Source Tree
+        uses: actions/checkout@v4
+        with:
+          repository: 'NothingOSS/android_kernel_6.1_nothing_mt6878'
+          ref: 'mt6878/Tetris/16b'
+          path: 'workspace/common'
+
+      # 3. MediaTek Core Platform Modules Repo
+      - name: Checkout MediaTek Platform Modules
+        uses: actions/checkout@v4
+        with:
+          repository: 'NothingOSS/android_kernel_modules_nothing_mt6878'
+          ref: 'mt6878/Tetris/16b'
+          path: 'workspace/private/mediatek-modules'
+
+      # 4. Device Peripheral Modules Repo
+      - name: Checkout CMF Phone 1 Device Specific Modules
+        uses: actions/checkout@v4
+        with:
+          repository: 'NothingOSS/android_kernel_device_modules_6.1_nothing_mt6878'
+          ref: 'mt6878/Tetris/16b'
+          path: 'workspace/private/devices/tetris'
+
+      - name: Set up Java & Build Tools
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '11'
+
+      - name: Inject APatch Configs into GKI Defconfig
+        run: |
+          cd workspace/common
+          GKI_CONFIG="arch/arm64/configs/gki_defconfig"
+          
+          if [ -f "$GKI_CONFIG" ]; then
+            echo "Modifying $GKI_CONFIG for APatch Symbol Resolution..."
+            sed -i 's/CONFIG_KALLSYMS_ALL=n/CONFIG_KALLSYMS_ALL=y/g' "$GKI_CONFIG" 2>/dev/null || true
+            echo "CONFIG_KALLSYMS=y" >> "$GKI_CONFIG"
+            echo "CONFIG_KALLSYMS_ALL=y" >> "$GKI_CONFIG"
+          else
+            echo "ERROR: gki_defconfig not found at default path!" && exit 1
+          fi
+
+      - name: Install System Package Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm python3 dwarves
+          sudo apt-get install -y git GNUmake libssl-dev bison flex libelf-dev bc ccache curl
 
-      - name: Clone Official Nothing Kernel Source
+      - name: Compile Unified Kernel and Vendor Modules via Kleaf
         run: |
-          # Cloning the exact branch for the CMF Phone 1 (Tetris)
-          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878.git kernel-6.1
+          cd workspace
+          
+          # Force source compilation of our modified common/ GKI tree
+          tools/bazel build \
+            --local_ram_resources=HOST_RAM*.5 \
+            --local_cpu_resources=HOST_CPUS-1 \
+            --config=no_download_gki \
+            //private/devices/tetris:tetris_boot
 
-      - name: Download Official AOSP Clang Compiler
+      - name: Fetch APatch Deployment Binaries
         run: |
-          mkdir -p toolchain
-          cd toolchain
-          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/18bfb7fbd697a1ad710fd0581a4ac9f3db385f71/clang-r498229b.tar.gz
-          tar -xf clang-r498229b.tar.gz
-          rm clang-r498229b.tar.gz
+          mkdir -p apatch && cd apatch
+          KP_VERSION=$(curl -s https://api.github.com/repos/bmax121/KernelPatch/releases/latest | grep -oP '"tag_name": "\K[^"]*')
+          
+          curl -LO "https://github.com/bmax121/KernelPatch/releases/download/${KP_VERSION}/kptools-linux-x86_64"
+          curl -LO "https://github.com/bmax121/KernelPatch/releases/download/${KP_VERSION}/kpimg-android"
+          
+          chmod +x kptools-linux-x86_64
+          mv kptools-linux-x86_64 kptools
 
-      - name: Inject KernelSU-Next
+      - name: Patch GKI Target Image and Build Final Boot Output
         run: |
-          cd kernel-6.1
-          # Automatically downloads and sets up the KernelSU-Next source tree
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
-
-      - name: Configure Kernel Subsystem Flags
-        run: |
-          cd kernel-6.1
-          # Force KernelSU configuration directly into Nothing's baseline configuration
-          echo "CONFIG_KSU=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_WITH_KPROBES=n" >> arch/arm64/configs/gki_defconfig
+          cd workspace
+          IMAGE_PATH=$(find bazel-bin/ -name "Image" | head -n 1)
+          BOOT_OUT=$(find bazel-bin/ -name "boot.img" | head -n 1)
           
-          # Turn off BTF generation to prevent vmlinux compilation errors
-          sed -i 's/CONFIG_DEBUG_INFO_BTF=y/CONFIG_DEBUG_INFO_BTF=n/g' arch/arm64/configs/gki_defconfig || true
-          echo "CONFIG_DEBUG_INFO_BTF=n" >> arch/arm64/configs/gki_defconfig
-
-      - name: Compile Nothing Kernel via Kbuild
-        run: |
-          cd kernel-6.1
+          echo "Kernel Image found: $IMAGE_PATH"
+          echo "Boot Image Target found: $BOOT_OUT"
           
-          # Set up environment paths to use our downloaded AOSP Clang compiler
-          export PATH="$(pwd)/../toolchain/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export LLVM=1
-          export LLVM_IAS=1
+          # Inject direct symbol hooking capability 
+          ../apatch/kptools -p --image "$IMAGE_PATH" --skey "${{ env.SUPERKEY }}" --kpimg ../apatch/kpimg-android --out ../Image-patched
           
-          echo "=== Generating Configuration ==="
-          make O=out gki_defconfig
-          
-          echo "=== Starting Multicore Compilation ==="
-          make -j$(nproc) O=out
-
-      - name: Repack Stock Boot Image with New Kernel
-        env:
-          INPUT_URL: "${{ github.event.inputs.boot_url }}"
-        run: |
-          mkdir -p patch_zone
-          cd patch_zone
-          
-          # 1. Determine boot.img source (URL input vs Repository folder)
-          if [ ! -z "$INPUT_URL" ]; then
-            echo "=== Downloading stock boot.img from provided link ==="
-            wget -O boot.img "$INPUT_URL"
-          elif [ -f "../input/boot.img" ]; then
-            echo "=== Using stock boot.img from repository input/ folder ==="
-            cp ../input/boot.img ./
-          else
-            echo "ERROR: No boot.img found! Please either paste a direct download URL in the trigger menu or commit a 'boot.img' file into an 'input/' directory."
-            exit 1
-          fi
-          
-          # 2. Extract official magiskboot binary straight from the official Magisk release APK
-          echo "=== Fetching official Magisk release toolkit ==="
-          wget -O magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-          unzip -j magisk.apk "lib/x86_64/libmagiskboot.so" -d .
-          mv libmagiskboot.so magiskboot
+          # Set up clean repack workspace using magiskboot
+          mkdir ../repack && cd ../repack
+          curl -LO https://github.com/chenxiaolong/BCR/raw/master/helpers/magiskboot
           chmod +x magiskboot
           
-          # 3. Unpack the stock image file
+          cp "../workspace/$BOOT_OUT" ./boot.img
           ./magiskboot unpack boot.img
           
-          # 4. Swap out the generic kernel code with the fresh Kbuild Image compilation
-          cp ../kernel-6.1/out/arch/arm64/boot/Image ./kernel
-          
-          # 5. Compile the assets into a fastboot-flashable image target
-          ./magiskboot repack boot.img ../patched_boot.img
-          echo "=== Successfully created flashable patched_boot.img ==="
+          # Swap GKI binary with patched version
+          cp ../Image-patched ./kernel
+          ./magiskboot repack boot.img ../apatch_boot.img
 
-      - name: Upload Flashable Patched Boot Image
+      - name: Upload Final Flashable Boot Binary
         uses: actions/upload-artifact@v4
         with:
-          name: CMF1-Fastboot-Flashable-Boot
-          path: patched_boot.img
+          name: CMF_Phone1_APatch_Boot
+          path: apatch_boot.img
