@@ -55,7 +55,8 @@ jobs:
         run: |
           mkdir -p workspace/toolchain
           cd workspace/toolchain
-          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r498229b.tar.gz
+          # Pointing directly to a commit hash where clang-r498229b is frozen and preserved
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/18bfb7fbd697a1ad710fd0581a4ac9f3db385f71/clang-r498229b.tar.gz
           tar -xf clang-r498229b.tar.gz
           rm clang-r498229b.tar.gz
 
