@@ -62,12 +62,24 @@ jobs:
           export LLVM=1
           export LLVM_IAS=1
           
-          # Fix missing hermetic AOSP prebuilt layout paths required by Kleaf
           echo "=== Setting up hermetic tool paths ==="
-          mkdir -p prebuilts
-          rm -rf prebuilts/build-tools prebuilts/kernel-build-tools
-          ln -sf $(pwd)/build/kernel/build-tools prebuilts/build-tools
-          ln -sf $(pwd)/build/kernel/build-tools prebuilts/kernel-build-tools
+          # 1. Break the circular loop by pointing the expected prebuilts path directly to system binaries
+          mkdir -p prebuilts/build-tools/path
+          ln -sf /usr/bin prebuilts/build-tools/path/linux-x86
+          
+          # 2. Add alternative build tool path references used by Kleaf configs
+          mkdir -p prebuilts/kernel-build-tools/linux-x86
+          ln -sf /usr/bin prebuilts/kernel-build-tools/linux-x86/bin
+          ln -sf /usr/bin prebuilts/kernel-build-tools/linux-x86/path
+          
+          # 3. Map our downloaded AOSP Clang compiler to the directory layout Bazel scans
+          mkdir -p prebuilts/clang/host/linux-x86
+          ln -sf $(pwd)/toolchain prebuilts/clang/host/linux-x86/clang-r498229b
+          
+          # 4. Create required root environment layout shortcuts for Bazel execution
+          mkdir -p tools
+          ln -sf ../build/kernel/kleaf/bazel.sh tools/bazel
+          ln -sf build/kernel/kleaf/bazel.WORKSPACE WORKSPACE
           
           # Check if the modern Kleaf entry point exists
           if [ -f "build/kernel/kleaf/bazel.sh" ]; then
