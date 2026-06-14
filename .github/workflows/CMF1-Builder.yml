@@ -2,6 +2,11 @@ name: Build Official Nothing CMF 1 Kernel
 
 on:
   workflow_dispatch:
+    inputs:
+      boot_url:
+        description: 'Direct URL to Stock boot.img (e.g., from OneDrive, Google Drive direct link, or a file host)'
+        required: false
+        default: ''
 
 jobs:
   build-kernel:
@@ -75,26 +80,32 @@ jobs:
 
       - name: Repack Stock Boot Image with New Kernel
         run: |
-          # 1. Verify that the user uploaded their stock boot image
-          if [ ! -f "input/boot.img" ]; then
-            echo "ERROR: Please place your stock boot.img inside an 'input/' folder in your repository!"
+          mkdir -p patch_zone
+          cd patch_zone
+          
+          # 1. Determine boot.img source (URL input vs Repository folder)
+          if [ ! -z "${{ github.event.inputs.boot_url }}" ]; then
+            echo "=== Downloading stock boot.img from provided link ==="
+            wget -O boot.img "${{ github.event.inputs.boot_url }}"
+          elif [ -f "../input/boot.img" ]; then
+            echo "=== Using stock boot.img from repository input/ folder ==="
+            cp ../input/boot.img ./
+          else
+            echo "ERROR: No boot.img found! Please either paste a direct download URL in the trigger menu or commit a 'boot.img' file into an 'input/' directory."
             exit 1
           fi
           
           # 2. Download a compiled Linux binary of magiskboot
-          mkdir -p patch_zone
-          cd patch_zone
           wget https://github.com/magisk-modules-alt-repo/magiskboot_ndk/raw/main/bin/x86_64/magiskboot
           chmod +x magiskboot
           
-          # 3. Bring in the stock boot file and extract it
-          cp ../input/boot.img ./
+          # 3. Unpack the stock image file
           ./magiskboot unpack boot.img
           
-          # 4. Replace the old kernel file with the newly compiled GKI Image
+          # 4. Swap out the generic kernel code with the fresh Kbuild Image compilation
           cp ../kernel-6.1/out/arch/arm64/boot/Image ./kernel
           
-          # 5. Pack everything back together into a fresh img target
+          # 5. Compile the assets into a fastboot-flashable image target
           ./magiskboot repack boot.img ../patched_boot.img
           echo "=== Successfully created flashable patched_boot.img ==="
 
