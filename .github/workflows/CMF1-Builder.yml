@@ -7,20 +7,29 @@ jobs:
   build-kernel:
     runs-on: ubuntu-latest
     steps:
-      - name: Free Disk Space (Maximize Runner Space)
-        uses: easimon/maximize-build-space@main
-        with:
-          root-reserve-mb: 2048
-          swap-size-mb: 1024
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
+      - name: Free Disk Space (Aggressive Cleanup)
+        run: |
+          echo "=== Disk Space Before Cleanup ==="
+          df -h
+          
+          # Remove massive pre-installed runtimes, SDKs, and tools we do not need
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/lib/jvm
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /opt/microsoft
+          sudo rm -rf /opt/google
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          
+          echo "=== Disk Space After Cleanup ==="
+          df -h
 
       - name: Configure Environment & Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex structural libelf-dev libssl-dev libcrypto++-dev tcl-dev tk-dev textlive microcom git ccache zip unzip curl wget
+          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev tcl-dev tk-dev git ccache zip unzip curl wget
           echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
 
       - name: Create Workspace Directory
@@ -46,7 +55,6 @@ jobs:
         run: |
           mkdir -p workspace/toolchain
           cd workspace/toolchain
-          # Android 14 Kernel 6.1 generally uses Clang r498229b or similar. Fetching standard r498229b prebuilt:
           wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r498229b.tar.gz
           tar -xf clang-r498229b.tar.gz
           rm clang-r498229b.tar.gz
@@ -60,16 +68,13 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CC=clang
           
-          # Custom building logic based on typical MTK layout. 
-          # Note: If Nothing OSS relies on a specific build flag, we will adjust it based on your error logs.
           if [ -f "build/build.sh" ]; then
              echo "Executing build via build.sh script..."
-             # Modify or pass variables to build.sh if required by your specific source layout
              bash build/build.sh
           elif [ -f "kernel/Makefile" ]; then
              echo "No build orchestration script found matching default paths; falling back to direct defconfig compilation."
              cd kernel
-             make O=out generic_defconfig # This is a placeholder; MediaTek uses custom configs we will extract if it fails
+             make O=out generic_defconfig
              make -j$(nproc) O=out
           fi
 
