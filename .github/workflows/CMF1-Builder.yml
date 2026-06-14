@@ -79,14 +79,16 @@ jobs:
           make -j$(nproc) O=out
 
       - name: Repack Stock Boot Image with New Kernel
+        env:
+          INPUT_URL: "${{ github.event.inputs.boot_url }}"
         run: |
           mkdir -p patch_zone
           cd patch_zone
           
           # 1. Determine boot.img source (URL input vs Repository folder)
-          if [ ! -z "${{ github.event.inputs.boot_url }}" ]; then
+          if [ ! -z "$INPUT_URL" ]; then
             echo "=== Downloading stock boot.img from provided link ==="
-            wget -O boot.img "${{ github.event.inputs.boot_url }}"
+            wget -O boot.img "$INPUT_URL"
           elif [ -f "../input/boot.img" ]; then
             echo "=== Using stock boot.img from repository input/ folder ==="
             cp ../input/boot.img ./
@@ -95,8 +97,11 @@ jobs:
             exit 1
           fi
           
-          # 2. Download a compiled Linux binary of magiskboot
-          wget https://github.com/magisk-modules-alt-repo/magiskboot_ndk/raw/main/bin/x86_64/magiskboot
+          # 2. Extract official magiskboot binary straight from the official Magisk release APK
+          echo "=== Fetching official Magisk release toolkit ==="
+          wget -O magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+          unzip -j magisk.apk "lib/x86_64/libmagiskboot.so" -d .
+          mv libmagiskboot.so magiskboot
           chmod +x magiskboot
           
           # 3. Unpack the stock image file
