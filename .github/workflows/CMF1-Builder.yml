@@ -15,7 +15,7 @@ jobs:
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /usr/lib/jvm
+          # Note: We no longer remove /usr/lib/jvm because Bazel requires Java to run
           sudo rm -rf /usr/local/share/chromium
           sudo rm -rf /opt/microsoft
           sudo rm -rf /opt/google
@@ -26,7 +26,7 @@ jobs:
       - name: Configure Environment & Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm python3
+          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm python3 default-jre-headless
           echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
 
       - name: Clone Build Scripts (Kleaf/Bazel engine)
@@ -81,7 +81,11 @@ jobs:
           mkdir -p prebuilts/clang/host/linux-x86
           ln -sf $(pwd)/toolchain prebuilts/clang/host/linux-x86/clang-r498229b
           
-          # 4. Create required root environment layout shortcuts for Bazel execution
+          # 4. Map the system Java binary to the structural path Bazel demands
+          mkdir -p prebuilts/jdk/jdk11/linux-x86/bin
+          ln -sf /usr/bin/java prebuilts/jdk/jdk11/linux-x86/bin/java
+          
+          # 5. Create required root environment layout shortcuts for Bazel execution
           mkdir -p tools
           ln -sf ../build/kernel/kleaf/bazel.sh tools/bazel
           ln -sf build/kernel/kleaf/bazel.WORKSPACE WORKSPACE
