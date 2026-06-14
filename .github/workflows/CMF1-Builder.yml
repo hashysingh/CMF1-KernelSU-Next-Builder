@@ -53,6 +53,11 @@ jobs:
           tar -xf clang-r498229b.tar.gz
           rm clang-r498229b.tar.gz
 
+      - name: Clone AOSP Bazel Prebuilt Engine
+        run: |
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/bazel/linux-x86_64 prebuilts/bazel/linux-x86_64
+          chmod +x prebuilts/bazel/linux-x86_64/bazel
+
       - name: Execute Kernel Compilation
         run: |
           # Set up paths relative to root directory layout
@@ -63,7 +68,7 @@ jobs:
           export LLVM_IAS=1
           
           echo "=== Setting up hermetic tool paths ==="
-          # 1. Break the circular loop by pointing the expected prebuilts path directly to system binaries
+          # 1. Point the expected build-tools paths directly to system binaries
           mkdir -p prebuilts/build-tools/path
           ln -sf /usr/bin prebuilts/build-tools/path/linux-x86
           
