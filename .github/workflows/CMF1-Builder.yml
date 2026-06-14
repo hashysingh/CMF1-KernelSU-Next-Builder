@@ -7,6 +7,9 @@ jobs:
   build-kernel:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -21,7 +24,7 @@ jobs:
       - name: Install Compiler Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm python3
+          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm python3 dwarves
 
       - name: Clone Official Nothing Kernel Source
         run: |
@@ -48,6 +51,10 @@ jobs:
           # Force KernelSU configuration directly into Nothing's baseline configuration
           echo "CONFIG_KSU=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_WITH_KPROBES=n" >> arch/arm64/configs/gki_defconfig
+          
+          # Turn off BTF generation to prevent vmlinux compilation errors
+          sed -i 's/CONFIG_DEBUG_INFO_BTF=y/CONFIG_DEBUG_INFO_BTF=n/g' arch/arm64/configs/gki_defconfig || true
+          echo "CONFIG_DEBUG_INFO_BTF=n" >> arch/arm64/configs/gki_defconfig
 
       - name: Compile Nothing Kernel via Kbuild
         run: |
@@ -66,10 +73,33 @@ jobs:
           echo "=== Starting Multicore Compilation ==="
           make -j$(nproc) O=out
 
-      - name: Upload Finished Kernel Image
+      - name: Repack Stock Boot Image with New Kernel
+        run: |
+          # 1. Verify that the user uploaded their stock boot image
+          if [ ! -f "input/boot.img" ]; then
+            echo "ERROR: Please place your stock boot.img inside an 'input/' folder in your repository!"
+            exit 1
+          fi
+          
+          # 2. Download a compiled Linux binary of magiskboot
+          mkdir -p patch_zone
+          cd patch_zone
+          wget https://github.com/magisk-modules-alt-repo/magiskboot_ndk/raw/main/bin/x86_64/magiskboot
+          chmod +x magiskboot
+          
+          # 3. Bring in the stock boot file and extract it
+          cp ../input/boot.img ./
+          ./magiskboot unpack boot.img
+          
+          # 4. Replace the old kernel file with the newly compiled GKI Image
+          cp ../kernel-6.1/out/arch/arm64/boot/Image ./kernel
+          
+          # 5. Pack everything back together into a fresh img target
+          ./magiskboot repack boot.img ../patched_boot.img
+          echo "=== Successfully created flashable patched_boot.img ==="
+
+      - name: Upload Flashable Patched Boot Image
         uses: actions/upload-artifact@v4
         with:
-          name: CMF1-Official-KernelSU-Next
-          path: |
-            kernel-6.1/out/arch/arm64/boot/Image
-            kernel-6.1/out/arch/arm64/boot/Image.gz
+          name: CMF1-Fastboot-Flashable-Boot
+          path: patched_boot.img
