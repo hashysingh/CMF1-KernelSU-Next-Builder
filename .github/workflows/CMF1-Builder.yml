@@ -45,9 +45,10 @@ jobs:
         run: |
           git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_modules_nothing_mt6878.git vendor/mediatek/kernel_modules
 
-      - name: Clone AOSP Clang Host Repo (Kleaf Configs)
+      - name: Clone AOSP Clang Host Repo (Kleaf Configs via main-kernel branch)
         run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
+          # Explicitly target the main-kernel branch to pull down the kleaf definition directory
+          git clone --depth=1 -b main-kernel https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
 
       - name: Download and Extract Target Clang Compiler
         run: |
