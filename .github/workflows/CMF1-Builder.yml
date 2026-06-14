@@ -1,118 +1,75 @@
-name: Build CMF Phone 1 Kernel
+name: Build Official Nothing CMF 1 Kernel
 
 on:
-  workflow_dispatch: # Allows you to manually trigger the build from the Actions tab
+  workflow_dispatch:
 
 jobs:
   build-kernel:
     runs-on: ubuntu-latest
     steps:
-      - name: Free Disk Space (Aggressive Cleanup)
+      - name: Free Disk Space
         run: |
-          echo "=== Disk Space Before Cleanup ==="
-          df -h
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/.ghcup
-          # Note: We do not remove /usr/lib/jvm because Bazel requires Java to run
+          sudo rm -rf /usr/lib/jvm
           sudo rm -rf /usr/local/share/chromium
           sudo rm -rf /opt/microsoft
           sudo rm -rf /opt/google
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          echo "=== Disk Space After Cleanup ==="
-          df -h
 
-      - name: Configure Environment & Install Dependencies
+      - name: Install Compiler Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm python3 default-jre-headless
-          echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
+          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm python3
 
-      - name: Clone Build Scripts (Kleaf/Bazel engine)
+      - name: Clone Official Nothing Kernel Source
         run: |
-          git clone --depth=1 -b master https://github.com/NothingOSS/android_kernel_build_nothing_mt6878.git build
-
-      - name: Clone Main Kernel Source (Common Tree)
-        run: |
+          # Cloning the exact branch for the CMF Phone 1 (Tetris)
           git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878.git kernel-6.1
 
-      - name: Clone Device Modules (Phone Specific Trees)
+      - name: Download Official AOSP Clang Compiler
         run: |
-          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_device_modules_6.1_nothing_mt6878.git kernel_device_modules-6.1
-
-      - name: Clone MediaTek Vendor Kernel Modules (Core Drivers)
-        run: |
-          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_modules_nothing_mt6878.git vendor/mediatek/kernel_modules
-
-      - name: Clone AOSP Clang Host Repo (Kleaf Configs via main-kernel branch)
-        run: |
-          # Explicitly target the main-kernel branch to pull down the kleaf definition directory
-          git clone --depth=1 -b main-kernel https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
-
-      - name: Download and Extract Target Clang Compiler
-        run: |
-          mkdir -p prebuilts/clang/host/linux-x86/clang-r498229b
-          cd prebuilts/clang/host/linux-x86/clang-r498229b
+          mkdir -p toolchain
+          cd toolchain
           wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/18bfb7fbd697a1ad710fd0581a4ac9f3db385f71/clang-r498229b.tar.gz
           tar -xf clang-r498229b.tar.gz
           rm clang-r498229b.tar.gz
 
-      - name: Clone AOSP Bazel Prebuilt Engine
+      - name: Inject KernelSU-Next
         run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/bazel/linux-x86_64 prebuilts/bazel/linux-x86_64
-          chmod +x prebuilts/bazel/linux-x86_64/bazel
+          cd kernel-6.1
+          # Automatically downloads and sets up the KernelSU-Next source tree
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
-      - name: Execute Kernel Compilation
+      - name: Configure Kernel Subsystem Flags
         run: |
-          # Set up paths relative to root directory layout
-          export PATH="$(pwd)/prebuilts/clang/host/linux-x86/clang-r498229b/bin:$PATH"
+          cd kernel-6.1
+          # Force KernelSU configuration directly into Nothing's baseline configuration
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_WITH_KPROBES=n" >> arch/arm64/configs/gki_defconfig
+
+      - name: Compile Nothing Kernel via Kbuild
+        run: |
+          cd kernel-6.1
+          
+          # Set up environment paths to use our downloaded AOSP Clang compiler
+          export PATH="$(pwd)/../toolchain/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
           
-          echo "=== Setting up hermetic tool paths ==="
-          # 1. Point the expected build-tools paths directly to system binaries
-          mkdir -p prebuilts/build-tools/path
-          ln -sf /usr/bin prebuilts/build-tools/path/linux-x86
+          echo "=== Generating Configuration ==="
+          make O=out gki_defconfig
           
-          # 2. Add alternative build tool path references used by Kleaf configs
-          mkdir -p prebuilts/kernel-build-tools/linux-x86
-          ln -sf /usr/bin prebuilts/kernel-build-tools/linux-x86/bin
-          ln -sf /usr/bin prebuilts/kernel-build-tools/linux-x86/path
-          
-          # 3. Map the system Java binary to the structural path Bazel demands
-          mkdir -p prebuilts/jdk/jdk11/linux-x86/bin
-          ln -sf /usr/bin/java prebuilts/jdk/jdk11/linux-x86/bin/java
-          
-          # 4. Create required root environment layout shortcuts for Bazel execution
-          mkdir -p tools
-          ln -sf ../build/kernel/kleaf/bazel.sh tools/bazel
-          ln -sf build/kernel/kleaf/bazel.WORKSPACE WORKSPACE
-          
-          # Check if the modern Kleaf entry point exists
-          if [ -f "build/kernel/kleaf/bazel.sh" ]; then
-             echo "=== Modern Android 14 Kleaf Build Engine Detected ==="
-             echo "Triggering MediaTek Bazel target compile via Kleaf..."
-             chmod +x build/kernel/kleaf/bazel.sh
-             build/kernel/kleaf/bazel.sh build //kernel_device_modules-6.1:mgk_64_k61
-          else
-             echo "=== Falling back to manual pure Kbuild compilation ==="
-             cd kernel-6.1
-             echo "Generating kernel configuration via gki_defconfig..."
-             make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
-             echo "Starting multicore kernel compilation loop..."
-             make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
-          fi
+          echo "=== Starting Multicore Compilation ==="
+          make -j$(nproc) O=out
 
-      - name: Upload Compiled Artifacts
+      - name: Upload Finished Kernel Image
         uses: actions/upload-artifact@v4
         with:
-          name: CMF-Kernel-Artifacts
+          name: CMF1-Official-KernelSU-Next
           path: |
             kernel-6.1/out/arch/arm64/boot/Image
             kernel-6.1/out/arch/arm64/boot/Image.gz
-            bazel-bin/**/*Image*
-            bazel-bin/**/*.ko
-            **/*.ko
