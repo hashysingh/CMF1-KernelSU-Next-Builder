@@ -29,7 +29,6 @@ jobs:
           sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm python3
           echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
 
-      # Step 3: Clone everything directly into the standard MediaTek GKI layout structure
       - name: Clone Build Scripts (Kleaf/Bazel engine)
         run: |
           git clone --depth=1 -b master https://github.com/NothingOSS/android_kernel_build_nothing_mt6878.git build
@@ -63,11 +62,17 @@ jobs:
           export LLVM=1
           export LLVM_IAS=1
           
+          # Fix missing hermetic AOSP prebuilt layout paths required by Kleaf
+          echo "=== Setting up hermetic tool paths ==="
+          mkdir -p prebuilts
+          rm -rf prebuilts/build-tools prebuilts/kernel-build-tools
+          ln -sf $(pwd)/build/kernel/build-tools prebuilts/build-tools
+          ln -sf $(pwd)/build/kernel/build-tools prebuilts/kernel-build-tools
+          
           # Check if the modern Kleaf entry point exists
           if [ -f "build/kernel/kleaf/bazel.sh" ]; then
              echo "=== Modern Android 14 Kleaf Build Engine Detected ==="
              echo "Triggering MediaTek Bazel target compile via Kleaf..."
-             # MediaTek's configuration specifies building the main phone target architecture layout
              chmod +x build/kernel/kleaf/bazel.sh
              build/kernel/kleaf/bazel.sh build //kernel_device_modules-6.1:mgk_64_k61
           else
@@ -86,5 +91,6 @@ jobs:
           path: |
             kernel-6.1/out/arch/arm64/boot/Image
             kernel-6.1/out/arch/arm64/boot/Image.gz
-            bazel-bin/kernel_device_modules-6.1/**/*
+            bazel-bin/**/*Image*
+            bazel-bin/**/*.ko
             **/*.ko
