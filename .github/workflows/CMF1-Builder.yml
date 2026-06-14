@@ -1,0 +1,83 @@
+name: Build CMF Phone 1 Kernel
+
+on:
+  workflow_dispatch: # Allows you to manually trigger the build from the Actions tab
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free Disk Space (Maximize Runner Space)
+        uses: easimon/maximize-build-space@main
+        with:
+          root-reserve-mb: 2048
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Configure Environment & Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex structural libelf-dev libssl-dev libcrypto++-dev tcl-dev tk-dev textlive microcom git ccache zip unzip curl wget
+          echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Create Workspace Directory
+        run: mkdir -p workspace
+
+      - name: Clone Build Scripts
+        run: |
+          git clone --depth=1 -b master https://github.com/NothingOSS/android_kernel_build_nothing_mt6878.git workspace/build
+
+      - name: Clone Main Kernel Source
+        run: |
+          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878.git workspace/kernel
+
+      - name: Clone Kernel Modules
+        run: |
+          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_modules_nothing_mt6878.git workspace/modules
+
+      - name: Clone Device Modules
+        run: |
+          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_device_modules_6.1_nothing_mt6878.git workspace/device_modules
+
+      - name: Download AOSP Clang Toolchain
+        run: |
+          mkdir -p workspace/toolchain
+          cd workspace/toolchain
+          # Android 14 Kernel 6.1 generally uses Clang r498229b or similar. Fetching standard r498229b prebuilt:
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r498229b.tar.gz
+          tar -xf clang-r498229b.tar.gz
+          rm clang-r498229b.tar.gz
+
+      - name: Execute Kernel Compilation
+        run: |
+          cd workspace
+          export PATH="$(pwd)/toolchain/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=clang
+          
+          # Custom building logic based on typical MTK layout. 
+          # Note: If Nothing OSS relies on a specific build flag, we will adjust it based on your error logs.
+          if [ -f "build/build.sh" ]; then
+             echo "Executing build via build.sh script..."
+             # Modify or pass variables to build.sh if required by your specific source layout
+             bash build/build.sh
+          elif [ -f "kernel/Makefile" ]; then
+             echo "No build orchestration script found matching default paths; falling back to direct defconfig compilation."
+             cd kernel
+             make O=out generic_defconfig # This is a placeholder; MediaTek uses custom configs we will extract if it fails
+             make -j$(nproc) O=out
+          fi
+
+      - name: Upload Compiled Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CMF-Kernel-Artifacts
+          path: |
+            workspace/kernel/out/arch/arm64/boot/Image
+            workspace/kernel/out/arch/arm64/boot/Image.gz
+            workspace/**/*.ko
