@@ -79,7 +79,8 @@ jobs:
       - name: Install System Package Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git GNUmake libssl-dev bison flex libelf-dev bc ccache curl
+          # Changed GNUmake to make
+          sudo apt-get install -y git make libssl-dev bison flex libelf-dev bc ccache curl
 
       - name: Compile Unified Kernel and Vendor Modules via Kleaf
         run: |
