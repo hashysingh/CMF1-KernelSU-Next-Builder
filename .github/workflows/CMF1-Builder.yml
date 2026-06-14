@@ -26,72 +26,57 @@ jobs:
       - name: Configure Environment & Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm
+          sudo apt-get install -y bc bison build-essential flex libelf-dev libssl-dev libcrypto++-dev git ccache zip unzip curl wget lld llvm python3
           echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
 
-      - name: Create Workspace Directory
-        run: mkdir -p workspace
-
-      - name: Clone Build Scripts
+      # Step 3: Clone everything directly into the standard MediaTek GKI layout structure
+      - name: Clone Build Scripts (Kleaf/Bazel engine)
         run: |
-          git clone --depth=1 -b master https://github.com/NothingOSS/android_kernel_build_nothing_mt6878.git workspace/build
+          git clone --depth=1 -b master https://github.com/NothingOSS/android_kernel_build_nothing_mt6878.git build
 
-      - name: Clone Main Kernel Source
+      - name: Clone Main Kernel Source (Common Tree)
         run: |
-          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878.git workspace/kernel
+          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878.git kernel-6.1
 
-      - name: Clone Kernel Modules
+      - name: Clone Device Modules (Phone Specific Trees)
         run: |
-          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_modules_nothing_mt6878.git workspace/modules
+          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_device_modules_6.1_nothing_mt6878.git kernel_device_modules-6.1
 
-      - name: Clone Device Modules
+      - name: Clone MediaTek Vendor Kernel Modules (Core Drivers)
         run: |
-          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_device_modules_6.1_nothing_mt6878.git workspace/device_modules
+          git clone --depth=1 -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_modules_nothing_mt6878.git vendor/mediatek/kernel_modules
 
       - name: Download AOSP Clang Toolchain
         run: |
-          mkdir -p workspace/toolchain
-          cd workspace/toolchain
-          # Using a stable, frozen commit snapshot of the AOSP Clang r498229b toolchain
+          mkdir -p toolchain
+          cd toolchain
           wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/18bfb7fbd697a1ad710fd0581a4ac9f3db385f71/clang-r498229b.tar.gz
           tar -xf clang-r498229b.tar.gz
           rm clang-r498229b.tar.gz
 
       - name: Execute Kernel Compilation
         run: |
-          cd workspace
-          
-          # Add the compiled AOSP Clang toolchain binaries directly to the environment PATH
+          # Set up paths relative to root directory layout
           export PATH="$(pwd)/toolchain/bin:$PATH"
-          
-          # Core cross-compilation environment layout 
           export ARCH=arm64
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
           
-          echo "=== Inspecting Cloned Build Tools Repository Structure ==="
-          ls -R build || echo "No directory matching 'build' folder"
-          
-          # Locate any built-in build.sh file provided by Nothing OS inside the build layout
-          BUILD_SCRIPT=$(find build -name "build.sh" | head -n 1)
-          
-          if [ -n "$BUILD_SCRIPT" ]; then
-             echo "Orchestration script detected at: $BUILD_SCRIPT"
-             export BUILD_CONFIG=kernel/build.config.aarch64
-             bash "$BUILD_SCRIPT"
-          elif [ -f "kernel/Makefile" ]; then
-             echo "No specialized automated build script found; triggering custom pure manual LLVM Kbuild compilation..."
-             cd kernel
-             
+          # Check if the modern Kleaf entry point exists
+          if [ -f "build/kernel/kleaf/bazel.sh" ]; then
+             echo "=== Modern Android 14 Kleaf Build Engine Detected ==="
+             echo "Triggering MediaTek Bazel target compile via Kleaf..."
+             # MediaTek's configuration specifies building the main phone target architecture layout
+             chmod +x build/kernel/kleaf/bazel.sh
+             build/kernel/kleaf/bazel.sh build //kernel_device_modules-6.1:mgk_64_k61
+          else
+             echo "=== Falling back to manual pure Kbuild compilation ==="
+             cd kernel-6.1
              echo "Generating kernel configuration via gki_defconfig..."
              make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
-             
-             echo "Starting multicore kernel compilation compilation loop..."
+             echo "Starting multicore kernel compilation loop..."
              make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
-          else
-             echo "Fatal Configuration Error: No kernel source Makefiles found inside work tree!"
-             exit 1
           fi
 
       - name: Upload Compiled Artifacts
@@ -99,8 +84,7 @@ jobs:
         with:
           name: CMF-Kernel-Artifacts
           path: |
-            workspace/kernel/out/arch/arm64/boot/Image
-            workspace/kernel/out/arch/arm64/boot/Image.gz
-            workspace/out/**/Image
-            workspace/out/**/Image.gz
-            workspace/**/*.ko
+            kernel-6.1/out/arch/arm64/boot/Image
+            kernel-6.1/out/arch/arm64/boot/Image.gz
+            bazel-bin/kernel_device_modules-6.1/**/*
+            **/*.ko
