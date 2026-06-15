@@ -12,29 +12,39 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git clang lld llvm python3 make bison flex libssl-dev libelf-dev curl bc
 
-      - name: Install Bazelisk (Bazel)
+      - name: Install Bazelisk
         run: |
           curl -LO https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
           sudo mv bazelisk-linux-amd64 /usr/local/bin/bazel
           sudo chmod +x /usr/local/bin/bazel
-          bazel --version
 
       - name: Setup Workspace
         run: |
-          mkdir -p android_kernel && cd android_kernel
+          # Create a workspace directory in the root of the runner
+          mkdir -p $GITHUB_WORKSPACE/android_kernel
+          cd $GITHUB_WORKSPACE/android_kernel
           
-          # Clone each repository with its specific branch as provided
+          # Clone with specific branches
           git clone -b master https://github.com/NothingOSS/android_kernel_build_nothing_mt6878 build
           git clone -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878 common
           git clone -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_modules_nothing_mt6878 modules
           git clone -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_device_modules_6.1_nothing_mt6878 device_modules
 
+      - name: Verify Directory Structure
+        run: |
+          echo "Listing directories in workspace:"
+          ls -R $GITHUB_WORKSPACE/android_kernel
+
       - name: Build Kernel
         run: |
-          cd android_kernel
-          # Execute the build.sh from the 'build' repo
-          # This should now work with the correct repo branches in place
-          ./build/build.sh
+          cd $GITHUB_WORKSPACE/android_kernel
+          # We check if the file exists before running it
+          if [ -f "./build/build.sh" ]; then
+            ./build/build.sh
+          else
+            echo "ERROR: build.sh not found!"
+            exit 1
+          fi
 
       - name: Upload Output
         uses: actions/upload-artifact@v4
