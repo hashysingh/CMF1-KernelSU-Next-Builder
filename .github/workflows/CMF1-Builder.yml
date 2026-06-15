@@ -1,135 +1,44 @@
-name: Build CMF Phone 1 Kernel and Modules with APatch
+name: Build CMF Phone 1 Kernel
 
 on:
+  push:
+    branches: [ master ]
   workflow_dispatch:
-    inputs:
-      SUPERKEY:
-        description: 'Set your APatch SuperKey (8-63 characters)'
-        required: true
-        default: 'MySecureSuperKey2026!'
 
 jobs:
-  build-kernel:
-    runs-on: ubuntu-22.04
-    env:
-      SUPERKEY: ${{ github.event.inputs.SUPERKEY }}
-
+  build:
+    runs-on: ubuntu-latest
     steps:
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-
-      # 1. Main Orchestrator Repo (Uses default main branch)
-      - name: Checkout Kernel Build Manifest Orchestrator
-        uses: actions/checkout@v4
-        with:
-          repository: 'NothingOSS/android_kernel_build_nothing_mt6878'
-          ref: 'master'
-          path: 'workspace'
-
-      # 2. Base Kernel GKI Tree Repo
-      - name: Checkout Base Kernel Source Tree
-        uses: actions/checkout@v4
-        with:
-          repository: 'NothingOSS/android_kernel_6.1_nothing_mt6878'
-          ref: 'mt6878/Tetris/16b'
-          path: 'workspace/common'
-
-      # 3. MediaTek Core Platform Modules Repo
-      - name: Checkout MediaTek Platform Modules
-        uses: actions/checkout@v4
-        with:
-          repository: 'NothingOSS/android_kernel_modules_nothing_mt6878'
-          ref: 'mt6878/Tetris/16b'
-          path: 'workspace/private/mediatek-modules'
-
-      # 4. Device Peripheral Modules Repo
-      - name: Checkout CMF Phone 1 Device Specific Modules
-        uses: actions/checkout@v4
-        with:
-          repository: 'NothingOSS/android_kernel_device_modules_6.1_nothing_mt6878'
-          ref: 'mt6878/Tetris/16b'
-          path: 'workspace/private/devices/tetris'
-
-      - name: Set up Java & Build Tools
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '11'
-
-      - name: Inject APatch Configs into GKI Defconfig
-        run: |
-          cd workspace/common
-          GKI_CONFIG="arch/arm64/configs/gki_defconfig"
-          
-          if [ -f "$GKI_CONFIG" ]; then
-            echo "Modifying $GKI_CONFIG for APatch Symbol Resolution..."
-            sed -i 's/CONFIG_KALLSYMS_ALL=n/CONFIG_KALLSYMS_ALL=y/g' "$GKI_CONFIG" 2>/dev/null || true
-            echo "CONFIG_KALLSYMS=y" >> "$GKI_CONFIG"
-            echo "CONFIG_KALLSYMS_ALL=y" >> "$GKI_CONFIG"
-          else
-            echo "ERROR: gki_defconfig not found at default path!" && exit 1
-          fi
-
-      - name: Install System Package Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          # Changed GNUmake to make
-          sudo apt-get install -y git make libssl-dev bison flex libelf-dev bc ccache curl
+          sudo apt-get install -y git bazel clang lld llvm python3
 
-      - name: Compile Unified Kernel and Vendor Modules via Kleaf
+      - name: Checkout Repositories
         run: |
-          cd workspace
-          
-          # Force source compilation of our modified common/ GKI tree
-          tools/bazel build \
-            --local_ram_resources=HOST_RAM*.5 \
-            --local_cpu_resources=HOST_CPUS-1 \
-            --config=no_download_gki \
-            //private/devices/tetris:tetris_boot
+          mkdir kernel_workspace && cd kernel_workspace
+          # Clone the build orchestrator
+          git clone https://github.com/NothingOSS/android_kernel_build_nothing_mt6878 build
+          # Clone the core kernel source
+          git clone https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878 common
+          # Clone the modules
+          git clone https://github.com/NothingOSS/android_kernel_modules_nothing_mt6878 modules
+          # Clone the device modules
+          git clone https://github.com/NothingOSS/android_kernel_device_modules_6.1_nothing_mt6878 device
 
-      - name: Fetch APatch Deployment Binaries
+      - name: Build Kernel
         run: |
-          mkdir -p apatch && cd apatch
-          KP_VERSION=$(curl -s https://api.github.com/repos/bmax121/KernelPatch/releases/latest | grep -oP '"tag_name": "\K[^"]*')
-          
-          curl -LO "https://github.com/bmax121/KernelPatch/releases/download/${KP_VERSION}/kptools-linux-x86_64"
-          curl -LO "https://github.com/bmax121/KernelPatch/releases/download/${KP_VERSION}/kpimg-android"
-          
-          chmod +x kptools-linux-x86_64
-          mv kptools-linux-x86_64 kptools
+          cd kernel_workspace
+          # Execute the build script provided by the build repo
+          # You may need to specify the correct target defined in the build repo
+          ./build/build.sh
+        env:
+          # Kleaf usually requires specific environment variables
+          # Check your build.config file for these names
+          TARGET_PRODUCT: "nothing_mt6878"
 
-      - name: Patch GKI Target Image and Build Final Boot Output
-        run: |
-          cd workspace
-          IMAGE_PATH=$(find bazel-bin/ -name "Image" | head -n 1)
-          BOOT_OUT=$(find bazel-bin/ -name "boot.img" | head -n 1)
-          
-          echo "Kernel Image found: $IMAGE_PATH"
-          echo "Boot Image Target found: $BOOT_OUT"
-          
-          # Inject direct symbol hooking capability 
-          ../apatch/kptools -p --image "$IMAGE_PATH" --skey "${{ env.SUPERKEY }}" --kpimg ../apatch/kpimg-android --out ../Image-patched
-          
-          # Set up clean repack workspace using magiskboot
-          mkdir ../repack && cd ../repack
-          curl -LO https://github.com/chenxiaolong/BCR/raw/master/helpers/magiskboot
-          chmod +x magiskboot
-          
-          cp "../workspace/$BOOT_OUT" ./boot.img
-          ./magiskboot unpack boot.img
-          
-          # Swap GKI binary with patched version
-          cp ../Image-patched ./kernel
-          ./magiskboot repack boot.img ../apatch_boot.img
-
-      - name: Upload Final Flashable Boot Binary
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CMF_Phone1_APatch_Boot
-          path: apatch_boot.img
+          name: kernel-output
+          path: kernel_workspace/out/
