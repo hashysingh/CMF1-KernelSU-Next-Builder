@@ -1,4 +1,4 @@
-name: Build Nothing Kernel
+name: Build CMF Phone 1 Kernel
 
 on:
   workflow_dispatch:
@@ -10,31 +10,34 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git clang lld llvm bazel
+          sudo apt-get install -y git clang lld llvm python3 make bison flex libssl-dev libelf-dev curl bc
+
+      - name: Install Bazelisk (Bazel)
+        run: |
+          curl -LO https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          sudo mv bazelisk-linux-amd64 /usr/local/bin/bazel
+          sudo chmod +x /usr/local/bin/bazel
+          bazel --version
 
       - name: Setup Workspace
         run: |
-          mkdir -p android-kernel && cd android-kernel
-          # Clone build orchestrator
-          git clone -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_build_nothing_mt6878 build
-          # Clone core kernel
+          mkdir -p android_kernel && cd android_kernel
+          
+          # Clone each repository with its specific branch as provided
+          git clone -b master https://github.com/NothingOSS/android_kernel_build_nothing_mt6878 build
           git clone -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878 common
-          # Clone modules
           git clone -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_modules_nothing_mt6878 modules
-          # Clone device modules
           git clone -b mt6878/Tetris/16b https://github.com/NothingOSS/android_kernel_device_modules_6.1_nothing_mt6878 device_modules
 
-      - name: Execute Bazel Build
+      - name: Build Kernel
         run: |
-          cd android-kernel
-          # Kleaf build command
-          # Note: The target name (e.g., //common:kernel_aarch64) 
-          # depends on how the build repo defines the 'kernel' rule.
-          # You may need to run `bazel query //...` first to find the exact target.
-          bazel build //common:kernel_dist
+          cd android_kernel
+          # Execute the build.sh from the 'build' repo
+          # This should now work with the correct repo branches in place
+          ./build/build.sh
 
-      - name: Upload Artifacts
+      - name: Upload Output
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-dist
-          path: android-kernel/dist/
+          name: kernel_output
+          path: android_kernel/out/
